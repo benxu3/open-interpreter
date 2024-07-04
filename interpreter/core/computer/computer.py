@@ -1,4 +1,11 @@
+import ast
 import json
+import os
+from typing import Callable
+
+import dependencies
+from pyinstrument import Profiler
+from pyinstrument.renderers.console import ConsoleRenderer
 
 from .ai.ai import Ai
 from .browser.browser import Browser
@@ -141,3 +148,211 @@ Do not import the computer module, or any of its sub-modules. They are already i
         for key, value in data_dict.items():
             if hasattr(self, key):
                 setattr(self, key, value)
+
+    #############################################################################################
+    #############################################################################################
+    # Context Functions [PUBLIC FUNCTIONS]
+    #############################################################################################
+    #############################################################################################
+
+    def trace(self, func: Callable, *args, **kwargs):
+        """
+        Profile the execution of a function with given arguments.
+
+        Args:
+            func (Callable): The function to be profiled.
+            *args: Positional arguments to pass to the function.
+            **kwargs: Keyword arguments to pass to the function.
+
+        Returns:
+            str: The profiling output.
+        """
+        profiler = Profiler()
+
+        # Start profiling
+        profiler.start()
+
+        # Call the function to be profiled
+        func(*args, **kwargs)
+        # self.search_manager.get_function_dependencies(function_name)
+
+        # Stop profiling
+        session = profiler.stop()
+
+        # Render the profile
+        profile_renderer = ConsoleRenderer(unicode=True, color=True, show_all=True)
+        profile_output = profile_renderer.render(session)
+
+        return profile_output
+
+    def map(self, path: str = ""):
+        """
+        parsed_files: list[str] = []
+            # list of all files ending with .py, which are likely not test files
+            # These are all ABSOLUTE paths.
+
+        class_index: ClassIndexType = {}
+            # for file name in the indexes, assume they are absolute path
+            # class name -> [(file_name, line_range)]
+
+        class_func_index: ClassFuncIndexType = {}
+            # {class_name -> {func_name -> [(file_name, line_range)]}}
+            # inner dict is a list, since we can have (1) overloading func names,
+            # and (2) multiple classes with the same name, having the same method
+
+        function_index: FuncIndexType = {}
+            # function name -> [(file_name, line_range)]
+
+        parent_index: ParentIndexType = {}
+            # function name -> parent name (Class)
+
+        dependencies_index: DependenciesIndexType = {}
+            # function name -> [dependency names]
+        """
+        # handle empty path
+        if not path:
+            path = os.getcwd()
+
+        # build indices
+        (
+            class_index,
+            class_func_index,
+            function_index,
+            parsed_files,
+            parent_index,
+            dependencies_index,
+        ) = dependencies._build_indices(path)
+
+        # repository representation
+        repository = dependencies._retrieve_repo(
+            parsed_files,
+            class_index,
+            class_func_index,
+            dependencies_index,
+            parent_index,
+            function_index,
+        )
+
+        return repository
+
+    def search(self, project_path: str, query: str):
+        # build indices
+        (
+            _,
+            class_func_index,
+            function_index,
+            parsed_files,
+            _,
+            _,
+        ) = dependencies._build_indices(project_path)
+
+        # search code for query code
+        tool_output, _, success = dependencies._search_code(
+            project_path, parsed_files, query, class_func_index, function_index
+        )
+
+        if success:
+            print(tool_output)
+
+    def read(self, repo_path: str, file_path: str, line_no: int):
+        """
+        Given a file path and line number, extract the code snippet from the line number scope and display the
+        parent structure of the function at scope line number.
+        """
+        # build indices
+        (
+            class_index,
+            class_func_index,
+            function_index,
+            _,
+            _,
+            dependencies_index,
+        ) = dependencies._build_indices(repo_path)
+
+        (
+            class_name,
+            class_range,
+            func_name,
+            func_range,
+        ) = dependencies._file_line_to_class_and_func_ranges(
+            file_path,
+            line_no,
+            class_func_index,
+            dependencies_index,
+            function_index,
+            class_index,
+        )
+        if not func_name:
+            return "no function in the scope of the given line_no"
+        if not func_range:
+            return "no function range was found"
+
+        start = 0
+        if class_range:
+            start = class_range[0]
+
+        end = 0
+        if func_range:
+            end = func_range[0]
+
+        # get the code snippet between func_name:start and class_name:start using search_manager.retrieve_code_snippet(line_nums=True)
+        intermediary_code = dependencies._retrieve_code_snippet(
+            file_path, start, end - 1, line_nums=False
+        )
+
+        # tree = ast.parse the code snippet
+        intermediary_code_tree = ast.parse(intermediary_code)
+
+        intermediary_parent_funcs = []
+        # loop through ast.walk(tree)
+        for node in ast.walk(intermediary_code_tree):
+            if isinstance(node, ast.FunctionDef):
+                # extract the function signature using search_utils.extract_func_sig_from_ast
+                node_name = str(node.name)
+
+                node_range = None
+                result = function_index.get(node_name)
+                if result:
+                    _, node_range = result[0]
+
+                if not node_range:
+                    print("error no range for node: ", node_name)
+                    return
+
+                function_sig = dependencies._get_code_snippets_with_lineno(
+                    file_path, node_range[0], node_range[0]
+                )
+
+                func_name_dependencies = dependencies_index.get(node.name)
+
+                # if the function node has func_name as a dependency, add it to the output
+                if func_name_dependencies:
+                    for name in func_name_dependencies:
+                        if func_name in name:
+                            intermediary_parent_funcs.append(function_sig)
+
+        output = ""
+
+        # once we've finished walking the tree, prepend the class name and line to the output
+        if class_name:
+            result = class_index.get(class_name)
+            if result:
+                _, line_range = result[0]
+                class_start = line_range.start
+                class_sig = f"{class_start}: class {class_name}:\n"
+                output += class_sig
+                output += "\n ... \n"
+
+        for function in intermediary_parent_funcs:
+            output += function
+            output += "\n ... \n"
+
+        # append the function implementation to the output
+        function_impl = dependencies._retrieve_code_snippet(
+            file_path, func_range[0], func_range[1], line_nums=True
+        )
+        output += function_impl
+        output += "\n ... \n"
+
+        # return the output
+        return output
