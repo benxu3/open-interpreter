@@ -266,6 +266,13 @@ def start_terminal_interface(interpreter):
         },
     ]
 
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        message = " ".join(sys.argv[1:])
+        interpreter.messages.append(
+            {"role": "user", "type": "message", "content": "I " + message}
+        )
+        sys.argv = sys.argv[:1]
+
     # Check for deprecated flags before parsing arguments
     deprecated_flags = {
         "--debug_mode": "--verbose",
@@ -278,7 +285,17 @@ def start_terminal_interface(interpreter):
             sys.argv.remove(old_flag)
             sys.argv.append(new_flag)
 
-    parser = argparse.ArgumentParser(
+    class CustomHelpParser(argparse.ArgumentParser):
+        def print_help(self, *args, **kwargs):
+            super().print_help(*args, **kwargs)
+            special_help_message = '''
+Open Interpreter, 2024
+
+Use """ to write multi-line messages.
+            '''
+            print(special_help_message)
+
+    parser = CustomHelpParser(
         description="Open Interpreter", usage="%(prog)s [options]"
     )
 
@@ -556,7 +573,7 @@ def main():
                         if contribute == "y":
                             interpreter.contribute_conversation = True
                             interpreter.display_message(
-                                "\n*Thank you for contributing!*"
+                                "\n*Thank you for contributing!*\n"
                             )
 
                 if (
