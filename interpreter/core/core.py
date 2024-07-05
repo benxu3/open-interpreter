@@ -17,6 +17,7 @@ from .computer.computer import Computer
 from .default_system_message import default_system_message
 from .llm.llm import Llm
 from .respond import respond
+from .server import server
 from .utils.telemetry import send_telemetry
 from .utils.truncate_output import truncate_output
 
