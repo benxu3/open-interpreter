@@ -158,213 +158,208 @@ Do not import the computer module, or any of its sub-modules. They are already i
             if hasattr(self, key):
                 setattr(self, key, value)
 
+    #############################################################################################
+    #############################################################################################
+    # Context Functions [PUBLIC FUNCTIONS]
+    #############################################################################################
+    #############################################################################################
 
-#############################################################################################
-#############################################################################################
-# Context Functions [PUBLIC FUNCTIONS]
-#############################################################################################
-#############################################################################################
+    def trace(self, func: Callable, *args, **kwargs):
+        """
+        Profile the execution of a function with given arguments.
 
+        Args:
+            func (Callable): The function to be profiled.
+            *args: Positional arguments to pass to the function.
+            **kwargs: Keyword arguments to pass to the function.
 
-def trace(func: Callable, *args, **kwargs):
-    """
-    Profile the execution of a function with given arguments.
+        Returns:
+            str: The profiling output.
+        """
+        profiler = Profiler()
 
-    Args:
-        func (Callable): The function to be profiled.
-        *args: Positional arguments to pass to the function.
-        **kwargs: Keyword arguments to pass to the function.
+        # Start profiling
+        profiler.start()
 
-    Returns:
-        str: The profiling output.
-    """
-    profiler = Profiler()
+        # Call the function to be profiled
+        func(*args, **kwargs)
+        # self.search_manager.get_function_dependencies(function_name)
 
-    # Start profiling
-    profiler.start()
+        # Stop profiling
+        session = profiler.stop()
 
-    # Call the function to be profiled
-    func(*args, **kwargs)
-    # self.search_manager.get_function_dependencies(function_name)
+        # Render the profile
+        profile_renderer = ConsoleRenderer(unicode=True, color=True, show_all=True)
+        profile_output = profile_renderer.render(session)
 
-    # Stop profiling
-    session = profiler.stop()
+        return profile_output
 
-    # Render the profile
-    profile_renderer = ConsoleRenderer(unicode=True, color=True, show_all=True)
-    profile_output = profile_renderer.render(session)
+    def map(self, path: str = ""):
+        """
+        parsed_files: list[str] = []
+            # list of all files ending with .py, which are likely not test files
+            # These are all ABSOLUTE paths.
 
-    return profile_output
+        class_index: ClassIndexType = {}
+            # for file name in the indexes, assume they are absolute path
+            # class name -> [(file_name, line_range)]
 
+        class_func_index: ClassFuncIndexType = {}
+            # {class_name -> {func_name -> [(file_name, line_range)]}}
+            # inner dict is a list, since we can have (1) overloading func names,
+            # and (2) multiple classes with the same name, having the same method
 
-def map(path: str = ""):
-    """
-    parsed_files: list[str] = []
-        # list of all files ending with .py, which are likely not test files
-        # These are all ABSOLUTE paths.
+        function_index: FuncIndexType = {}
+            # function name -> [(file_name, line_range)]
 
-    class_index: ClassIndexType = {}
-        # for file name in the indexes, assume they are absolute path
-        # class name -> [(file_name, line_range)]
+        parent_index: ParentIndexType = {}
+            # function name -> parent name (Class)
 
-    class_func_index: ClassFuncIndexType = {}
-        # {class_name -> {func_name -> [(file_name, line_range)]}}
-        # inner dict is a list, since we can have (1) overloading func names,
-        # and (2) multiple classes with the same name, having the same method
+        dependencies_index: DependenciesIndexType = {}
+            # function name -> [dependency names]
+        """
+        # handle empty path
+        if not path:
+            path = os.getcwd()
 
-    function_index: FuncIndexType = {}
-        # function name -> [(file_name, line_range)]
+        # build indices
+        (
+            class_index,
+            class_func_index,
+            function_index,
+            parsed_files,
+            parent_index,
+            dependencies_index,
+        ) = _build_indices(path)
 
-    parent_index: ParentIndexType = {}
-        # function name -> parent name (Class)
+        # repository representation
+        repository = _retrieve_repo(
+            parsed_files,
+            class_index,
+            class_func_index,
+            dependencies_index,
+            parent_index,
+            function_index,
+        )
 
-    dependencies_index: DependenciesIndexType = {}
-        # function name -> [dependency names]
-    """
-    # handle empty path
-    if not path:
-        path = os.getcwd()
+        return repository
 
-    # build indices
-    (
-        class_index,
-        class_func_index,
-        function_index,
-        parsed_files,
-        parent_index,
-        dependencies_index,
-    ) = _build_indices(path)
+    def search(self, project_path: str, query: str):
+        # build indices
+        _, class_func_index, function_index, parsed_files, _, _ = _build_indices(
+            project_path
+        )
 
-    # repository representation
-    repository = _retrieve_repo(
-        parsed_files,
-        class_index,
-        class_func_index,
-        dependencies_index,
-        parent_index,
-        function_index,
-    )
+        # search code for query code
+        tool_output, _, success = _search_code(
+            project_path, parsed_files, query, class_func_index, function_index
+        )
 
-    return repository
+        if success:
+            print(tool_output)
 
+    def read(self, repo_path: str, file_path: str, line_no: int):
+        """
+        Given a file path and line number, extract the code snippet from the line number scope and display the
+        parent structure of the function at scope line number.
+        """
+        # build indices
+        (
+            class_index,
+            class_func_index,
+            function_index,
+            _,
+            _,
+            dependencies_index,
+        ) = _build_indices(repo_path)
 
-def search(project_path: str, query: str):
-    # build indices
-    _, class_func_index, function_index, parsed_files, _, _ = _build_indices(
-        project_path
-    )
+        (
+            class_name,
+            class_range,
+            func_name,
+            func_range,
+        ) = _file_line_to_class_and_func_ranges(
+            file_path,
+            line_no,
+            class_func_index,
+            dependencies_index,
+            function_index,
+            class_index,
+        )
+        if not func_name:
+            return "no function in the scope of the given line_no"
+        if not func_range:
+            return "no function range was found"
 
-    # search code for query code
-    tool_output, _, success = _search_code(
-        project_path, parsed_files, query, class_func_index, function_index
-    )
+        start = 0
+        if class_range:
+            start = class_range[0]
 
-    if success:
-        print(tool_output)
+        end = 0
+        if func_range:
+            end = func_range[0]
 
+        # get the code snippet between func_name:start and class_name:start using search_manager.retrieve_code_snippet(line_nums=True)
+        intermediary_code = _retrieve_code_snippet(
+            file_path, start, end - 1, line_nums=False
+        )
 
-def read(repo_path: str, file_path: str, line_no: int):
-    """
-    Given a file path and line number, extract the code snippet from the line number scope and display the
-    parent structure of the function at scope line number.
-    """
-    # build indices
-    (
-        class_index,
-        class_func_index,
-        function_index,
-        _,
-        _,
-        dependencies_index,
-    ) = _build_indices(repo_path)
+        # tree = ast.parse the code snippet
+        intermediary_code_tree = ast.parse(intermediary_code)
 
-    (
-        class_name,
-        class_range,
-        func_name,
-        func_range,
-    ) = _file_line_to_class_and_func_ranges(
-        file_path,
-        line_no,
-        class_func_index,
-        dependencies_index,
-        function_index,
-        class_index,
-    )
-    if not func_name:
-        return "no function in the scope of the given line_no"
-    if not func_range:
-        return "no function range was found"
+        intermediary_parent_funcs = []
+        # loop through ast.walk(tree)
+        for node in ast.walk(intermediary_code_tree):
+            if isinstance(node, ast.FunctionDef):
+                # extract the function signature using search_utils.extract_func_sig_from_ast
+                node_name = str(node.name)
 
-    start = 0
-    if class_range:
-        start = class_range[0]
+                node_range = None
+                result = function_index.get(node_name)
+                if result:
+                    _, node_range = result[0]
 
-    end = 0
-    if func_range:
-        end = func_range[0]
+                if not node_range:
+                    print("error no range for node: ", node_name)
+                    return
 
-    # get the code snippet between func_name:start and class_name:start using search_manager.retrieve_code_snippet(line_nums=True)
-    intermediary_code = _retrieve_code_snippet(
-        file_path, start, end - 1, line_nums=False
-    )
+                function_sig = _get_code_snippets_with_lineno(
+                    file_path, node_range[0], node_range[0]
+                )
 
-    # tree = ast.parse the code snippet
-    intermediary_code_tree = ast.parse(intermediary_code)
+                func_name_dependencies = dependencies_index.get(node.name)
 
-    intermediary_parent_funcs = []
-    # loop through ast.walk(tree)
-    for node in ast.walk(intermediary_code_tree):
-        if isinstance(node, ast.FunctionDef):
-            # extract the function signature using search_utils.extract_func_sig_from_ast
-            node_name = str(node.name)
+                # if the function node has func_name as a dependency, add it to the output
+                if func_name_dependencies:
+                    for name in func_name_dependencies:
+                        if func_name in name:
+                            intermediary_parent_funcs.append(function_sig)
 
-            node_range = None
-            result = function_index.get(node_name)
+        output = ""
+
+        # once we've finished walking the tree, prepend the class name and line to the output
+        if class_name:
+            result = class_index.get(class_name)
             if result:
-                _, node_range = result[0]
+                _, line_range = result[0]
+                class_start = line_range.start
+                class_sig = f"{class_start}: class {class_name}:\n"
+                output += class_sig
+                output += "\n ... \n"
 
-            if not node_range:
-                print("error no range for node: ", node_name)
-                return
-
-            function_sig = _get_code_snippets_with_lineno(
-                file_path, node_range[0], node_range[0]
-            )
-
-            func_name_dependencies = dependencies_index.get(node.name)
-
-            # if the function node has func_name as a dependency, add it to the output
-            if func_name_dependencies:
-                for name in func_name_dependencies:
-                    if func_name in name:
-                        intermediary_parent_funcs.append(function_sig)
-
-    output = ""
-
-    # once we've finished walking the tree, prepend the class name and line to the output
-    if class_name:
-        result = class_index.get(class_name)
-        if result:
-            _, line_range = result[0]
-            class_start = line_range.start
-            class_sig = f"{class_start}: class {class_name}:\n"
-            output += class_sig
+        for function in intermediary_parent_funcs:
+            output += function
             output += "\n ... \n"
 
-    for function in intermediary_parent_funcs:
-        output += function
+        # append the function implementation to the output
+        function_impl = _retrieve_code_snippet(
+            file_path, func_range[0], func_range[1], line_nums=True
+        )
+        output += function_impl
         output += "\n ... \n"
 
-    # append the function implementation to the output
-    function_impl = _retrieve_code_snippet(
-        file_path, func_range[0], func_range[1], line_nums=True
-    )
-    output += function_impl
-    output += "\n ... \n"
-
-    # return the output
-    return output
+        # return the output
+        return output
 
 
 #############################################################################################
