@@ -136,6 +136,9 @@ class OpenInterpreter:
         self.empty_code_output_template = empty_code_output_template
         self.code_output_sender = code_output_sender
 
+    def server(self, *args, **kwargs):
+        server(self, *args, **kwargs)
+
     def local_setup(self):
         """
         Opens a wizard that lets terminal users pick a local model.
