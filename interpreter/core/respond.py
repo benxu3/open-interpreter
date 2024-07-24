@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 import traceback
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -179,9 +180,37 @@ def respond(interpreter):
                     except:
                         pass
 
-                if language == "text" or language == "markdown":
+                if code.replace("\n", "").replace(" ", "").startswith("{language:"):
+                    try:
+                        code = code.replace("language: ", '"language": ').replace(
+                            "code: ", '"code": '
+                        )
+                        code_dict = json.loads(code)
+                        if set(code_dict.keys()) == {"language", "code"}:
+                            language = code_dict["language"]
+                            code = code_dict["code"]
+                            interpreter.messages[-1][
+                                "content"
+                            ] = code  # So the LLM can see it.
+                            interpreter.messages[-1][
+                                "format"
+                            ] = language  # So the LLM can see it.
+                    except:
+                        pass
+
+                if (
+                    language == "text"
+                    or language == "markdown"
+                    or language == "plaintext"
+                ):
                     # It does this sometimes just to take notes. Let it, it's useful.
                     # In the future we should probably not detect this behavior as code at all.
+                    real_content = interpreter.messages[-1]["content"]
+                    interpreter.messages[-1] = {
+                        "role": "assistant",
+                        "type": "message",
+                        "content": f"```\n{real_content}\n```",
+                    }
                     continue
 
                 # Is this language enabled/supported?
@@ -218,6 +247,11 @@ def respond(interpreter):
                     # The user might exit here.
                     # We need to tell python what we (the generator) should do if they exit
                     break
+
+                # They may have edited the code! Grab it again
+                code = [m for m in interpreter.messages if m["type"] == "code"][-1][
+                    "content"
+                ]
 
                 # don't let it import computer — we handle that!
                 if interpreter.computer.import_computer_api and language == "python":

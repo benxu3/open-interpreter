@@ -66,6 +66,9 @@ class Llm:
         And then processing its output, whether it's a function or non function calling model, into LMC format.
         """
 
+        if not self._is_loaded:
+            self.load()
+
         if (
             self.max_tokens is not None
             and self.context_window is not None
@@ -303,6 +306,8 @@ Continuing...
         if self._is_loaded:
             return
 
+        self._is_loaded = True
+
         if self.model.startswith("ollama/"):
             model_name = self.model.replace("ollama/", "")
             try:
@@ -357,7 +362,16 @@ Continuing...
 
         # Validate LLM should be moved here!!
 
-        self._is_loaded = True
+        if self.context_window == None:
+            try:
+                model_info = litellm.get_model_info(model=self.model)
+                self.context_window = model_info["max_input_tokens"]
+                if self.max_tokens == None:
+                    self.max_tokens = min(
+                        int(self.context_window * 0.2), model_info["max_output_tokens"]
+                    )
+            except:
+                pass
 
 
 def fixed_litellm_completions(**params):
@@ -378,25 +392,29 @@ def fixed_litellm_completions(**params):
         litellm.drop_params = True
 
     # Run completion
+    attempts = 4
     first_error = None
-    try:
-        yield from litellm.completion(**params)
-    except Exception as e:
-        # Store the first error
-        first_error = e
-        # LiteLLM can fail if there's no API key,
-        # even though some models (like local ones) don't require it.
 
-        if "api key" in str(first_error).lower() and "api_key" not in params:
-            print(
-                "LiteLLM requires an API key. Please set a dummy API key to prevent this message. (e.g `interpreter --api_key x` or `self.api_key = 'x'`)"
-            )
-
-        # So, let's try one more time with a dummy API key:
-        params["api_key"] = "x"
-
+    for attempt in range(attempts):
         try:
             yield from litellm.completion(**params)
-        except:
-            # If the second attempt also fails, raise the first error
-            raise first_error
+            return  # If the completion is successful, exit the function
+        except Exception as e:
+            if attempt == 0:
+                # Store the first error
+                first_error = e
+            if (
+                isinstance(e, litellm.exceptions.AuthenticationError)
+                and "api_key" not in params
+            ):
+                print(
+                    "LiteLLM requires an API key. Trying again with a dummy API key. In the future, please set a dummy API key to prevent this message. (e.g `interpreter --api_key x` or `self.api_key = 'x'`)"
+                )
+                # So, let's try one more time with a dummy API key:
+                params["api_key"] = "x"
+            if attempt == 1:
+                # Try turning up the temperature?
+                params["temperature"] = params.get("temperature", 0.0) + 0.1
+
+    if first_error is not None:
+        raise first_error  # If all attempts fail, raise the first error
