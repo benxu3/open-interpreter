@@ -531,8 +531,75 @@ def create_router(async_interpreter):
     @router.post("/")
     async def post_input(payload: Dict[str, Any]):
         try:
-            async_interpreter.input(payload)
-            return {"status": "success"}
+            async_interpreter.input.put(query)
+            return {"status": "succesfs"}
+        except Exception as e:
+            return {"error": str(e)}, 500
+
+    async def _resp_async_generator(message: str):
+        for i, chunk in enumerate(
+            async_interpreter.chat(message=message, stream=True, display=False)
+        ):
+            if chunk["type"] == "message" and chunk.get("content", ""):
+                content = chunk.get("content", "")
+
+                output_chunk = {
+                    "id": i,
+                    "object": "chat.completion.chunk",
+                    "created": time.time(),
+                    "model": "blah",
+                    "choices": [{"delta": {"content": content + " "}}],
+                }
+                yield f"data: {json.dumps(output_chunk)}\n\n"
+
+        yield "data: [DONE]\n\n"
+
+    @router.post("/v0/chat/completions")
+    async def chat_completion(request: ChatCompletionRequest):
+        if not (request.messages and request.messages[-1].role == "user"):
+            return {
+                "id": "404",
+                "object": "chat.completion",
+                "created": time.time(),
+                "model": request.model,
+                "choices": [
+                    {
+                        "message": ChatMessage(
+                            role="assistant", content="no user message was given"
+                        )
+                    }
+                ],
+            }
+
+        message = request.messages[-1].content
+        if request.stream:
+            return StreamingResponse(
+                _resp_async_generator(message), media_type="application/x-ndjson"
+            )
+        else:
+            content = async_interpreter.chat(
+                message=message, stream=False, display=False
+            )
+            return {
+                "id": "200",
+                "object": "chat.completion",
+                "created": time.time(),
+                "model": request.model,
+                "choices": [
+                    {"message": ChatMessage(role="assistant", content=content)}
+                ],
+            }
+
+    @router.post("/run")
+    async def run_code(payload: Dict[str, Any]):
+        language, code = payload.get("language"), payload.get("code")
+        if not (language and code):
+            return {"error": "Both 'language' and 'code' are required."}, 400
+        try:
+            print(f"Running {language}:", code)
+            output = async_interpreter.computer.run(language, code)
+            print("Output:", output)
+            return {"output": output}
         except Exception as e:
             return {"error": str(e)}, 500
 
