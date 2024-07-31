@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 import shortuuid
+from livekit import api
 from pydantic import BaseModel
 
 from .core import OpenInterpreter
@@ -536,77 +537,6 @@ def create_router(async_interpreter):
         except Exception as e:
             return {"error": str(e)}, 500
 
-    async def _resp_async_generator(message: str):
-        for i, chunk in enumerate(
-            async_interpreter.chat(message=message, stream=True, display=False)
-        ):
-            if chunk["type"] == "message" and chunk.get("content", ""):
-                content = chunk.get("content", "")
-
-                output_chunk = {
-                    "id": i,
-                    "object": "chat.completion.chunk",
-                    "created": time.time(),
-                    "model": "blah",
-                    "choices": [{"delta": {"content": content + " "}}],
-                }
-                yield f"data: {json.dumps(output_chunk)}\n\n"
-
-        yield "data: [DONE]\n\n"
-
-    @router.get("/token")
-    def getToken():
-        token = (
-            api.AccessToken(
-                os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET")
-            )
-            .with_identity("identity")
-            .with_name("my name")
-            .with_grants(
-                api.VideoGrants(
-                    room_join=True,
-                    room="my-room",
-                )
-            )
-        )
-        return {"accessToken": token.to_jwt()}
-
-    @router.post("/v0/chat/completions")
-    async def chat_completion(request: ChatCompletionRequest):
-        if not (request.messages and request.messages[-1].role == "user"):
-            return {
-                "id": "404",
-                "object": "chat.completion",
-                "created": time.time(),
-                "model": request.model,
-                "choices": [
-                    {
-                        "message": ChatMessage(
-                            role="assistant", content="no user message was given"
-                        )
-                    }
-                ],
-            }
-
-        message = request.messages[-1].content
-        if request.stream:
-            return StreamingResponse(
-                _resp_async_generator(message), media_type="application/x-ndjson"
-            )
-        else:
-            content = async_interpreter.chat(
-                message=message, stream=False, display=False
-            )
-            return {
-                "id": "200",
-                "object": "chat.completion",
-                "created": time.time(),
-                "model": request.model,
-                "choices": [
-                    {"message": ChatMessage(role="assistant", content=content)}
-                ],
-            }
-
     @router.post("/run")
     async def run_code(payload: Dict[str, Any]):
         language, code = payload.get("language"), payload.get("code")
@@ -702,6 +632,79 @@ def create_router(async_interpreter):
         max_tokens: Optional[int] = None
         temperature: Optional[float] = None
         stream: Optional[bool] = False
+
+    @router.get("/token")
+    def getToken():
+        token = (
+            api.AccessToken(
+                os.getenv("LIVEKIT_API_KEY"), os.getenv("LIVEKIT_API_SECRET")
+            )
+            .with_identity("identity")
+            .with_name("my name")
+            .with_grants(
+                api.VideoGrants(
+                    room_join=True,
+                    room="my-room",
+                )
+            )
+        )
+        return {"accessToken": token.to_jwt()}
+
+    async def _resp_async_generator(message: str):
+        for i, chunk in enumerate(
+            async_interpreter.chat(message=message, stream=True, display=False)
+        ):
+            if chunk["type"] == "message" and chunk.get("content", ""):
+                content = chunk.get("content", "")
+
+                output_chunk = {
+                    "id": i,
+                    "object": "chat.completion.chunk",
+                    "created": time.time(),
+                    "model": "blah",
+                    "choices": [{"delta": {"content": content + " "}}],
+                }
+                yield f"data: {json.dumps(output_chunk)}\n\n"
+
+        yield "data: [DONE]\n\n"
+
+    @router.post("/v0/chat/completions")
+    async def chat_completion_dev(request: ChatCompletionRequest):
+        if not (request.messages and request.messages[-1].role == "user"):
+            return {
+                "id": "404",
+                "object": "chat.completion",
+                "created": time.time(),
+                "model": request.model,
+                "choices": [
+                    {
+                        "message": ChatMessage(
+                            role="assistant", content="no user message was given"
+                        )
+                    }
+                ],
+            }
+
+        message = request.messages[-1].content
+        message_content = message if isinstance(message, str) else json.dumps(message)
+        if request.stream:
+            return StreamingResponse(
+                _resp_async_generator(message_content),
+                media_type="application/x-ndjson",
+            )
+        else:
+            content = async_interpreter.chat(
+                message=message, stream=False, display=False
+            )
+            return {
+                "id": "200",
+                "object": "chat.completion",
+                "created": time.time(),
+                "model": request.model,
+                "choices": [
+                    {"message": ChatMessage(role="assistant", content=content)}
+                ],
+            }
 
     async def openai_compatible_generator():
         for i, chunk in enumerate(async_interpreter._respond_and_store()):
