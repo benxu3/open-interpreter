@@ -34,6 +34,9 @@ except:
     pass
 
 
+complete_message = {"role": "server", "type": "status", "content": "complete"}
+
+
 class AsyncInterpreter(OpenInterpreter):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -125,13 +128,14 @@ class AsyncInterpreter(OpenInterpreter):
                         if "end" in chunk:
                             print("\n```\n\n------------\n\n", flush=True)
                     if chunk.get("format") != "active_line":
-                        print(chunk.get("content", ""), end="", flush=True)
+                        if "format" in chunk and "base64" in chunk["format"]:
+                            print("\n[An image was produced]")
+                        else:
+                            print(chunk.get("content", ""), end="", flush=True)
 
                 self.output_queue.sync_q.put(chunk)
 
-            self.output_queue.sync_q.put(
-                {"role": "server", "type": "status", "content": "complete"}
-            )
+            self.output_queue.sync_q.put(complete_message)
         except Exception as e:
             error = traceback.format_exc() + "\n" + str(e)
             error_message = {
@@ -140,6 +144,7 @@ class AsyncInterpreter(OpenInterpreter):
                 "content": traceback.format_exc() + "\n" + str(e),
             }
             self.output_queue.sync_q.put(error_message)
+            self.output_queue.sync_q.put(complete_message)
             print("\n\n--- SENT ERROR: ---\n\n")
             print(error)
             print("\n\n--- (ERROR ABOVE WAS SENT) ---\n\n")
@@ -428,6 +433,7 @@ def create_router(async_interpreter):
                             "content": traceback.format_exc() + "\n" + str(e),
                         }
                         await websocket.send_text(json.dumps(error_message))
+                        await websocket.send_text(json.dumps(complete_message))
                         print("\n\n--- SENT ERROR: ---\n\n")
                         print(error)
                         print("\n\n--- (ERROR ABOVE WAS SENT) ---\n\n")
@@ -496,6 +502,7 @@ def create_router(async_interpreter):
                             "content": traceback.format_exc() + "\n" + str(e),
                         }
                         await websocket.send_text(json.dumps(error_message))
+                        await websocket.send_text(json.dumps(complete_message))
                         print("\n\n--- SENT ERROR: ---\n\n")
                         print(error)
                         print("\n\n--- (ERROR ABOVE WAS SENT) ---\n\n")
@@ -510,6 +517,7 @@ def create_router(async_interpreter):
                     "content": traceback.format_exc() + "\n" + str(e),
                 }
                 await websocket.send_text(json.dumps(error_message))
+                await websocket.send_text(json.dumps(complete_message))
                 print("\n\n--- SENT ERROR: ---\n\n")
                 print(error)
                 print("\n\n--- (ERROR ABOVE WAS SENT) ---\n\n")
@@ -533,6 +541,10 @@ def create_router(async_interpreter):
         for key, value in payload.items():
             print(f"Updating settings: {key} = {value}")
             if key in ["llm", "computer"] and isinstance(value, dict):
+                if key == "auto_run":
+                    return {
+                        "error": f"The setting {key} is not modifiable through the server due to security constraints."
+                    }, 403
                 if hasattr(async_interpreter, key):
                     for sub_key, sub_value in value.items():
                         if hasattr(getattr(async_interpreter, key), sub_key):
@@ -691,17 +703,11 @@ def create_router(async_interpreter):
     return router
 
 
-host = os.getenv(
-    "HOST", "127.0.0.1"
-)  # IP address for localhost, used for local testing. To expose to local network, use 0.0.0.0
-port = int(os.getenv("PORT", 8000))  # Default port is 8000
-
-# FOR TESTING ONLY
-# host = "0.0.0.0"
-
-
 class Server:
-    def __init__(self, async_interpreter, host="127.0.0.1", port=8000):
+    DEFAULT_HOST = "127.0.0.1"
+    DEFAULT_PORT = 8000
+
+    def __init__(self, async_interpreter, host=None, port=None):
         self.app = FastAPI()
         router = create_router(async_interpreter)
         self.authenticate = authenticate_function
@@ -720,7 +726,9 @@ class Server:
                 )
 
         self.app.include_router(router)
-        self.config = uvicorn.Config(app=self.app, host=host, port=port)
+        h = host or os.getenv("HOST", Server.DEFAULT_HOST)
+        p = port or int(os.getenv("PORT", Server.DEFAULT_PORT))
+        self.config = uvicorn.Config(app=self.app, host=h, port=p)
         self.uvicorn_server = uvicorn.Server(self.config)
 
     @property
